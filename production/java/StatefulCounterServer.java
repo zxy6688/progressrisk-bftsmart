@@ -25,6 +25,7 @@ import java.security.NoSuchAlgorithmException;
 public final class StatefulCounterServer extends DefaultSingleRecoverable {
     private int counter = 0;
     private int operations = 0;
+    private boolean firstOrderedLogged = false;
     private byte[] snapshotPayload;
 
     public StatefulCounterServer(int id, int snapshotBytes) {
@@ -39,6 +40,7 @@ public final class StatefulCounterServer extends DefaultSingleRecoverable {
         System.out.printf(
                 "STATEFUL_COUNTER_READY id=%d snapshot_bytes=%d payload_sha256=%s%n",
                 id, snapshotBytes, sha256(snapshotPayload));
+        System.out.flush();
     }
 
     @Override
@@ -47,11 +49,18 @@ public final class StatefulCounterServer extends DefaultSingleRecoverable {
     }
 
     @Override
-    public byte[] appExecuteOrdered(byte[] command, MessageContext context) {
+    public synchronized byte[] appExecuteOrdered(byte[] command, MessageContext context) {
         try {
             int increment = new DataInputStream(new ByteArrayInputStream(command)).readInt();
             counter += increment;
             operations += 1;
+            if (!firstOrderedLogged) {
+                firstOrderedLogged = true;
+                System.out.printf(
+                        "STATEFUL_COUNTER_FIRST_ORDERED counter=%d operations=%d%n",
+                        counter, operations);
+                System.out.flush();
+            }
             return encode(counter);
         } catch (IOException e) {
             throw new IllegalStateException("invalid counter command", e);
@@ -59,7 +68,7 @@ public final class StatefulCounterServer extends DefaultSingleRecoverable {
     }
 
     @Override
-    public void installSnapshot(byte[] state) {
+    public synchronized void installSnapshot(byte[] state) {
         try (ObjectInputStream in = new ObjectInputStream(new ByteArrayInputStream(state))) {
             counter = in.readInt();
             operations = in.readInt();
@@ -69,13 +78,14 @@ public final class StatefulCounterServer extends DefaultSingleRecoverable {
             System.out.printf(
                     "STATE_TRANSFER_INSTALLED payload_bytes=%d counter=%d operations=%d payload_sha256=%s%n",
                     len, counter, operations, sha256(snapshotPayload));
+            System.out.flush();
         } catch (IOException e) {
             throw new IllegalStateException("cannot install snapshot", e);
         }
     }
 
     @Override
-    public byte[] getSnapshot() {
+    public synchronized byte[] getSnapshot() {
         try {
             ByteArrayOutputStream bytes = new ByteArrayOutputStream(snapshotPayload.length + 32);
             try (ObjectOutputStream out = new ObjectOutputStream(bytes)) {

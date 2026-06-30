@@ -11,6 +11,11 @@ on:
         description: "Comma-separated snapshot sizes in bytes"
         required: true
         default: "0,1048576,16777216"
+      run_formal_sweep:
+        description: "Run the requested sweep after the fixed 1-MiB preflight"
+        required: true
+        type: boolean
+        default: false
 
 jobs:
   benchmark:
@@ -24,7 +29,7 @@ jobs:
           java-version: '17'
       - name: Checkout official BFT-SMaRt v2.0
         run: git clone --depth 1 --branch v2.0 https://github.com/bft-smart/library.git third_party/bftsmart
-      - name: Preflight — one stateful handoff pair
+      - name: Preflight — one stateful 4→5→4 handoff pair
         env:
           BFTSMART_HOME: ${{ github.workspace }}/third_party/bftsmart
           RESULTS_DIR: ${{ github.workspace }}/bftsmart_handoff_preflight
@@ -32,15 +37,16 @@ jobs:
           STATE_SIZES: "1048576"
           PROBE_SECONDS: "45"
           WARMUP_SECONDS: "5"
-          VIEW_TIMEOUT_SECONDS: "15"
+          VIEW_TIMEOUT_SECONDS: "30"
         run: |
-            set +e
-            bash production/run_bftsmart_handoff_benchmark.sh
-            rc=$?
-            echo "===== FAILURE LOGS ====="
-            find bftsmart_handoff_preflight -type f -name '*.log' -print -exec tail -n 120 {} \;
-            exit $rc
+          set +e
+          bash production/run_bftsmart_handoff_benchmark.sh
+          rc=$?
+          echo "===== FAILURE LOGS ====="
+          find bftsmart_handoff_preflight -type f \( -name '*.log' -o -name '*.csv' \) -print -exec tail -n 160 {} \; || true
+          exit $rc
       - name: Formal state-size sweep
+        if: ${{ inputs.run_formal_sweep }}
         env:
           BFTSMART_HOME: ${{ github.workspace }}/third_party/bftsmart
           RESULTS_DIR: ${{ github.workspace }}/bftsmart_handoff_results
@@ -48,7 +54,7 @@ jobs:
           STATE_SIZES: ${{ inputs.state_sizes }}
           PROBE_SECONDS: "45"
           WARMUP_SECONDS: "5"
-          VIEW_TIMEOUT_SECONDS: "15"
+          VIEW_TIMEOUT_SECONDS: "30"
           SKIP_BUILD: "1"
         run: bash production/run_bftsmart_handoff_benchmark.sh
       - uses: actions/upload-artifact@v4

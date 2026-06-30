@@ -4,8 +4,10 @@ import bftsmart.tom.ServiceProxy;
 
 import java.io.ByteArrayOutputStream;
 import java.io.DataOutputStream;
+import java.io.BufferedWriter;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 
 /** Closed-loop request probe emitting nanosecond timestamped client outcomes. */
 public final class HandoffProbeClient {
@@ -32,23 +34,28 @@ public final class HandoffProbeClient {
         long retryMs = Long.parseLong(args[4]);
         Files.createDirectories(out.toAbsolutePath().getParent());
 
-        StringBuilder csv = new StringBuilder("start_epoch_ns,end_epoch_ns,ok,error\n");
         long deadline = System.nanoTime() + durationNs;
-        try (ServiceProxy proxy = new ServiceProxy(clientId)) {
+        try (BufferedWriter writer = Files.newBufferedWriter(
+                     out, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
+             ServiceProxy proxy = new ServiceProxy(clientId)) {
+            writer.write("start_epoch_ns,end_epoch_ns,ok,error\n");
+            writer.flush();
             while (System.nanoTime() < deadline) {
                 long start = epochNs();
                 try {
-                    byte[] reply = increment == 0 ? proxy.invokeUnordered(command(increment)) : proxy.invokeOrdered(command(increment));
+                    byte[] reply = increment == 0
+                            ? proxy.invokeUnordered(command(increment))
+                            : proxy.invokeOrdered(command(increment));
                     long end = epochNs();
-                    csv.append(start).append(',').append(end).append(',').append(reply != null).append(",\n");
+                    writer.write(start + "," + end + "," + (reply != null) + ",\n");
                 } catch (Exception e) {
                     long end = epochNs();
                     String type = e.getClass().getSimpleName().replace(',', '_');
-                    csv.append(start).append(',').append(end).append(",false,").append(type).append('\n');
+                    writer.write(start + "," + end + ",false," + type + "\n");
                     Thread.sleep(retryMs);
                 }
+                writer.flush();
             }
         }
-        Files.writeString(out, csv.toString());
     }
 }

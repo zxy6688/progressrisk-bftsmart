@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Automated BFT-SMaRt v2.0 membership-handoff benchmark for ProgressRisk.
-# It measures a real 4 -> 5 -> 4 membership cycle and a matched no-op control.
+# ProgressRisk BFT-SMaRt v2.0 membership-handoff benchmark (v1.13).
+# Includes port isolation, direct-JVM cleanup, and correct joining-replica readiness sequencing.
 set -euo pipefail
 
 : "${BFTSMART_HOME:?Set BFTSMART_HOME to an official bft-smart/library v2.0 checkout}"
@@ -9,8 +9,8 @@ set -euo pipefail
 : "${STATE_SIZES:=0,1048576,16777216}"
 : "${PROBE_SECONDS:=45}"
 : "${WARMUP_SECONDS:=5}"
-: "${VIEW_TIMEOUT_SECONDS:=15}"
-: "${PORT_BASE:=11000}"
+: "${VIEW_TIMEOUT_SECONDS:=20}"
+: "${PORT_BASE:=21000}"
 : "${SKIP_BUILD:=0}"
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -18,21 +18,37 @@ JAVA_SRC="$ROOT/production/java"
 mkdir -p "$RESULTS_DIR"
 RESULTS_DIR="$(cd "$RESULTS_DIR" && pwd)"
 
-[[ -x "$BFTSMART_HOME/gradlew" ]] || { echo "BFTSMART_HOME must point to BFT-SMaRt v2.0" >&2; exit 2; }
+[[ -x "$BFTSMART_HOME/gradlew" ]] || { echo "BFTSMART_HOME must point to a BFT-SMaRt v2.0 checkout" >&2; exit 2; }
 
 ACTIVE_PIDS=()
+stop_pid() {
+  local pid="$1"
+  kill -0 "$pid" 2>/dev/null || return 0
+  kill -TERM "$pid" 2>/dev/null || true
+  for _ in {1..20}; do
+    kill -0 "$pid" 2>/dev/null || return 0
+    sleep 0.1
+  done
+  kill -KILL "$pid" 2>/dev/null || true
+}
 cleanup_all() {
   local pid
-  for pid in "${ACTIVE_PIDS[@]:-}"; do kill "$pid" 2>/dev/null || true; done
+  for pid in "${ACTIVE_PIDS[@]:-}"; do stop_pid "$pid"; done
   for pid in "${ACTIVE_PIDS[@]:-}"; do wait "$pid" 2>/dev/null || true; done
   ACTIVE_PIDS=()
 }
 trap cleanup_all EXIT INT TERM
 
+show_logs() {
+  local runtime="$1"
+  echo "===== BFT-SMaRt runtime logs: $runtime =====" >&2
+  find "$runtime" -maxdepth 1 -type f -name '*.log' -print -exec tail -n 100 {} \; >&2 || true
+}
+
 wait_log() {
   local logfile="$1" regex="$2" timeout="$3" start="$SECONDS"
   until grep -Eq "$regex" "$logfile" 2>/dev/null; do
-    (( SECONDS - start <= timeout )) || { echo "Timed out waiting for '$regex' in $logfile" >&2; return 1; }
+    (( SECONDS - start <= timeout )) || { echo "Timed out waiting for '$regex' in $logfile" >&2; tail -n 120 "$logfile" >&2 || true; return 1; }
     sleep 0.2
   done
 }
@@ -43,7 +59,7 @@ wait_view_count() {
     local count
     count=$(grep -c 'New view:' "$logfile" 2>/dev/null || true)
     (( count >= min_count )) && return 0
-    (( SECONDS - start <= timeout )) || { echo "Timed out waiting for view $min_count in $logfile" >&2; return 1; }
+    (( SECONDS - start <= timeout )) || { echo "Timed out waiting for view count $min_count in $logfile" >&2; tail -n 120 "$logfile" >&2 || true; return 1; }
     sleep 0.2
   done
 }
@@ -61,25 +77,35 @@ set_property() {
   fi
 }
 
-configure_runtime() {
+write_hosts_config() {
   local dir="$1" base="$2"
-  rm -f "$dir/config/currentView"
-  cat >> "$dir/config/hosts.config" <<HOSTS
+  cat > "$dir/config/hosts.config" <<HOSTS
+# Isolated local benchmark topology. Each replica gets distinct client/server ports.
+0 127.0.0.1 $((base + 0))  $((base + 1))
+1 127.0.0.1 $((base + 10)) $((base + 11))
+2 127.0.0.1 $((base + 20)) $((base + 21))
+3 127.0.0.1 $((base + 30)) $((base + 31))
 4 127.0.0.1 $((base + 40)) $((base + 41))
 7001 127.0.0.1 $((base + 100))
 7002 127.0.0.1 $((base + 120))
 HOSTS
+}
+
+configure_runtime() {
+  local dir="$1" base="$2"
+  rm -f "$dir/config/currentView"
+  write_hosts_config "$dir" "$base"
   set_property "$dir/config/system.config" system.communication.defaultkeys true
   set_property "$dir/config/system.config" system.communication.useSignatures 0
   set_property "$dir/config/system.config" system.servers.num 4
   set_property "$dir/config/system.config" system.servers.f 1
   set_property "$dir/config/system.config" system.initial.view 0,1,2,3
   set_property "$dir/config/system.config" system.totalordermulticast.checkpoint_period 16
-  set_property "$dir/config/system.config" system.client.invokeOrderedTimeout 5
+  set_property "$dir/config/system.config" system.client.invokeOrderedTimeout 10
 }
 
 propagate_view() {
-  local from="$1" trial_root="$2" output="$3" start end view
+  local from="$1" trial_root="$2" output="$3" start end view target
   start=$(date +%s%N)
   view="$from/config/currentView"
   [[ -f "$view" ]] || { echo "currentView missing at $view" >&2; return 1; }
@@ -90,10 +116,24 @@ propagate_view() {
   echo "$start,$end" >> "$output"
 }
 
+start_server() {
+  local runtime="$1" id="$2" state_bytes="$3" cp="$4" log="$runtime/replica${id}.log"
+  # exec makes the background PID the JVM itself, so later TERM/KILL reliably frees its ports.
+  (cd "$runtime/replica$id" && exec java -cp "$cp" progressrisk.bftsmart.StatefulCounterServer "$id" "$state_bytes") > "$log" 2>&1 &
+  echo $!
+}
+
+stop_server_set() {
+  local pid
+  for pid in "$@"; do stop_pid "$pid"; done
+  for pid in "$@"; do wait "$pid" 2>/dev/null || true; done
+}
+
 run_mode() {
   local mode="$1" state_bytes="$2" trial="$3" trial_root="$4" dist="$5" summary="$6" base="$7"
   local runtime="$trial_root/$mode"
   mkdir -p "$runtime"
+  local who
   for who in replica0 replica1 replica2 replica3 replica4 client ttp; do
     cp -a "$dist" "$runtime/$who"
     configure_runtime "$runtime/$who" "$base"
@@ -105,45 +145,63 @@ run_mode() {
   javac -cp "$cp" -d "$runtime/classes" "$JAVA_SRC/StatefulCounterServer.java" "$JAVA_SRC/HandoffProbeClient.java"
   cp="$runtime/classes:$cp"
 
-  local server_pids=()
-  for id in 0 1 2 3 4; do
-    (cd "$runtime/replica$id" && java -cp "$cp" progressrisk.bftsmart.StatefulCounterServer "$id" "$state_bytes" > "$runtime/replica${id}.log" 2>&1) &
-    server_pids+=("$!")
-    ACTIVE_PIDS+=("$!")
-  done
+  local server_pids=() pid id
   for id in 0 1 2 3; do
-    wait_log "$runtime/replica${id}.log" 'STATEFUL_COUNTER_READY' "$VIEW_TIMEOUT_SECONDS"
+    pid=$(start_server "$runtime" "$id" "$state_bytes" "$cp")
+    server_pids+=("$pid"); ACTIVE_PIDS+=("$pid")
+  done
+  # The official README says replicas are ready only after initialization output; our own
+  # marker is printed immediately after ServiceReplica construction succeeds.
+  for id in 0 1 2 3; do
+    wait_log "$runtime/replica${id}.log" 'STATEFUL_COUNTER_READY' "$VIEW_TIMEOUT_SECONDS" || { show_logs "$runtime"; return 1; }
   done
 
   local probe="$runtime/probe.csv"
-  (cd "$runtime/client" && java -cp "$cp" progressrisk.bftsmart.HandoffProbeClient 1001 1 "$PROBE_SECONDS" "$probe" 10 > "$runtime/client.log" 2>&1) &
+  (cd "$runtime/client" && exec java -cp "$cp" progressrisk.bftsmart.HandoffProbeClient 1001 1 "$PROBE_SECONDS" "$probe" 10) > "$runtime/client.log" 2>&1 &
   local probe_pid=$!
   ACTIVE_PIDS+=("$probe_pid")
   sleep "$WARMUP_SECONDS"
+  # Do not add a joining replica until the 4-node committee has actually ordered
+  # at least one request. This makes the state-transfer validation meaningful.
+  wait_log "$runtime/replica0.log" 'STATEFUL_COUNTER_FIRST_ORDERED' "$VIEW_TIMEOUT_SECONDS" || { show_logs "$runtime"; return 1; }
 
   local ts="$runtime/timestamps.csv" prop="$runtime/view_propagation.csv"
   echo 'event,wall_ns' > "$ts"; echo 'start_ns,end_ns' > "$prop"
   local transfer_bytes='' transfer_counter='' transfer_operations=''
+
   if [[ "$mode" == "reconfig" ]]; then
+    # Replica 4 is a live spare: it binds its own unique ports but is absent from the initial view.
+    pid=$(start_server "$runtime" 4 "$state_bytes" "$cp")
+    server_pids+=("$pid"); ACTIVE_PIDS+=("$pid")
+    # Replica 4 is deliberately absent from the initial view. In BFT-SMaRt its
+    # ServiceReplica constructor blocks until the TTP sends the join result, so
+    # STATEFUL_COUNTER_READY cannot appear before the add command. The official
+    # "Waiting for the TTP" log is emitted only after its communication listener
+    # has been created and bound, which is the correct pre-add readiness point.
+    wait_log "$runtime/replica4.log" 'Waiting for the TTP' "$VIEW_TIMEOUT_SECONDS" || { show_logs "$runtime"; return 1; }
+
     local t_cmd_add t_view_add t_ready_add t_cmd_remove t_view_final transfer_line
     t_cmd_add=$(date +%s%N); echo "t_cmd_add,$t_cmd_add" >> "$ts"
-    (cd "$runtime/ttp" && ./smartrun.sh bftsmart.reconfiguration.util.DefaultVMServices 4 127.0.0.1 "$((base + 40))" "$((base + 41))") > "$runtime/add.log" 2>&1
-    for id in 0 1 2 3; do wait_view_count "$runtime/replica${id}.log" 1 "$VIEW_TIMEOUT_SECONDS"; done
+    (cd "$runtime/ttp" && ./smartrun.sh bftsmart.reconfiguration.util.DefaultVMServices 4 127.0.0.1 "$((base + 40))" "$((base + 41))") > "$runtime/add.log" 2>&1 || { show_logs "$runtime"; return 1; }
+    for id in 0 1 2 3; do wait_view_count "$runtime/replica${id}.log" 1 "$VIEW_TIMEOUT_SECONDS" || { show_logs "$runtime"; return 1; }; done
     t_view_add=$(date +%s%N); echo "t_view_add,$t_view_add" >> "$ts"
-    propagate_view "$runtime/ttp" "$runtime" "$prop"
-    wait_log "$runtime/replica4.log" 'STATE_TRANSFER_INSTALLED .*operations=[1-9][0-9]*' "$VIEW_TIMEOUT_SECONDS"
+    propagate_view "$runtime/ttp" "$runtime" "$prop" || { show_logs "$runtime"; return 1; }
+    # After the TTP join reply, the blocked constructor returns and the replica
+    # can initialize the BFT stack; only then can state transfer be installed.
+    wait_log "$runtime/replica4.log" 'STATEFUL_COUNTER_READY' "$VIEW_TIMEOUT_SECONDS" || { show_logs "$runtime"; return 1; }
+    wait_log "$runtime/replica4.log" 'STATE_TRANSFER_INSTALLED .*operations=[1-9][0-9]*' "$VIEW_TIMEOUT_SECONDS" || { show_logs "$runtime"; return 1; }
     transfer_line=$(grep -E 'STATE_TRANSFER_INSTALLED .*operations=[1-9][0-9]*' "$runtime/replica4.log" | tail -n 1)
     transfer_bytes=$(sed -nE 's/.*payload_bytes=([0-9]+).*/\1/p' <<<"$transfer_line")
     transfer_counter=$(sed -nE 's/.*counter=([0-9]+).*/\1/p' <<<"$transfer_line")
     transfer_operations=$(sed -nE 's/.*operations=([0-9]+).*/\1/p' <<<"$transfer_line")
-    [[ "$transfer_bytes" == "$state_bytes" ]] || { echo "state-transfer payload mismatch: expected $state_bytes, saw $transfer_bytes" >&2; return 1; }
+    [[ "$transfer_bytes" == "$state_bytes" ]] || { echo "state-transfer payload mismatch: expected $state_bytes, saw $transfer_bytes" >&2; show_logs "$runtime"; return 1; }
     t_ready_add=$(date +%s%N); echo "t_ready_add,$t_ready_add" >> "$ts"
 
     t_cmd_remove=$(date +%s%N); echo "t_cmd_remove,$t_cmd_remove" >> "$ts"
-    (cd "$runtime/ttp" && ./smartrun.sh bftsmart.reconfiguration.util.DefaultVMServices 4) > "$runtime/remove.log" 2>&1
-    for id in 0 1 2 3; do wait_view_count "$runtime/replica${id}.log" 2 "$VIEW_TIMEOUT_SECONDS"; done
+    (cd "$runtime/ttp" && ./smartrun.sh bftsmart.reconfiguration.util.DefaultVMServices 4) > "$runtime/remove.log" 2>&1 || { show_logs "$runtime"; return 1; }
+    for id in 0 1 2 3; do wait_view_count "$runtime/replica${id}.log" 2 "$VIEW_TIMEOUT_SECONDS" || { show_logs "$runtime"; return 1; }; done
     t_view_final=$(date +%s%N); echo "t_view_final,$t_view_final" >> "$ts"
-    propagate_view "$runtime/ttp" "$runtime" "$prop"
+    propagate_view "$runtime/ttp" "$runtime" "$prop" || { show_logs "$runtime"; return 1; }
   else
     echo "control_start,$(date +%s%N)" >> "$ts"
     sleep 4
@@ -151,10 +209,7 @@ run_mode() {
   fi
 
   wait "$probe_pid" || true
-  # Reap all local runtime processes before reusing any resources.
-  local pid
-  for pid in "${server_pids[@]}"; do kill "$pid" 2>/dev/null || true; done
-  for pid in "${server_pids[@]}"; do wait "$pid" 2>/dev/null || true; done
+  stop_server_set "${server_pids[@]}"
   ACTIVE_PIDS=()
 
   python3 - "$probe" "$ts" "$prop" "$summary" "$mode" "$state_bytes" "$trial" "$transfer_bytes" "$transfer_counter" "$transfer_operations" <<'PY'
@@ -224,8 +279,8 @@ for state_bytes in "${STATES[@]}"; do
   for ((trial=1; trial<=TRIALS; trial++)); do
     trial_root="$RESULTS_DIR/state_${state_bytes}/trial_${trial}"
     rm -rf "$trial_root"; mkdir -p "$trial_root"
-    no_op_base=$((PORT_BASE + state_index * 10000 + trial * 100))
-    reconfig_base=$((no_op_base + 1000))
+    no_op_base=$((PORT_BASE + state_index * 1000 + trial * 100))
+    reconfig_base=$((no_op_base + 500))
     run_mode no_op "$state_bytes" "$trial" "$trial_root" "$DIST" "$SUMMARY" "$no_op_base"
     run_mode reconfig "$state_bytes" "$trial" "$trial_root" "$DIST" "$SUMMARY" "$reconfig_base"
   done
