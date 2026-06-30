@@ -33,7 +33,13 @@ jobs:
           PROBE_SECONDS: "45"
           WARMUP_SECONDS: "5"
           VIEW_TIMEOUT_SECONDS: "15"
-        run: bash production/run_bftsmart_handoff_benchmark.sh
+        run: |
+            set +e
+            bash production/run_bftsmart_handoff_benchmark.sh
+            rc=$?
+            echo "===== FAILURE LOGS ====="
+            find bftsmart_handoff_preflight -type f -name '*.log' -print -exec tail -n 120 {} \;
+            exit $rc
       - name: Formal state-size sweep
         env:
           BFTSMART_HOME: ${{ github.workspace }}/third_party/bftsmart
