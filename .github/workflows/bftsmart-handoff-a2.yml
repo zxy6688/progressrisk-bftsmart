@@ -10,15 +10,12 @@ jobs:
     timeout-minutes: 22
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '8'
-
       - name: Checkout BFT-SMaRt v2.0
         run: git clone --depth 1 --branch v2.0 https://github.com/bft-smart/library.git third_party/bftsmart
-
       - name: Run one real stateful 4-to-5-to-4 handoff
         env:
           BFTSMART_HOME: ${{ github.workspace }}/third_party/bftsmart
@@ -31,10 +28,14 @@ jobs:
           set +e
           bash production/run_bftsmart_handoff_a2.sh
           rc=$?
-          echo '===== A2 HANDOFF LOGS ====='
-          find bftsmart_handoff_a2 -type f \( -name '*.log' -o -name 'verdict.txt' -o -name 'metrics.tsv' -o -name 'metadata.txt' \) -print -exec tail -n 260 {} \; || true
+          echo '===== A2 HANDOFF DIAGNOSTIC ====='
+          for f in bftsmart_handoff_a2/metadata.txt bftsmart_handoff_a2/metrics.tsv bftsmart_handoff_a2/verdict.txt; do
+            test -f "$f" && { echo "--- $f"; cat "$f"; }
+          done
+          echo '===== A2 KEY STATE-TRANSFER LINES ====='
+          grep -hE 'Last checkpoint|Constructing ApplicationState|Received state|Successfully installed proof|STATE_TRANSFER_INSTALLED|Negative delay' \
+            bftsmart_handoff_a2/logs/replica*.log 2>/dev/null || true
           exit "$rc"
-
       - uses: actions/upload-artifact@v4
         if: always()
         with:

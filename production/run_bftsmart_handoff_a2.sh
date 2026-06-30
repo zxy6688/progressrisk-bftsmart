@@ -186,6 +186,7 @@ mode=single_real_stateful_4_to_5_to_4_handoff
 bftsmart_ref=$(git -C "$BFTSMART_HOME" rev-parse HEAD 2>/dev/null || true)
 java=$(java -version 2>&1 | tr '\n' ';')
 snapshot_bytes=$SNAPSHOT_BYTES
+checkpoint_period=2
 port_base=22000
 initial_members=0,1,2,3
 post_add_members=0,1,2,3,4
@@ -215,10 +216,16 @@ for role in replica0 replica1 replica2 replica3 replica4 ttp client_add client_r
   cp "$APP_JAR" "$RUNTIME/$role/lib/"
   rm -f "$RUNTIME/$role/config/currentView"
   write_hosts "$RUNTIME/$role/config/hosts.config"
-  sed -i -E 's|^[[:space:]]*system\.totalordermulticast\.checkpoint_period[[:space:]]*=.*$|system.totalordermulticast.checkpoint_period = 1|' \
+  # In BFT mode, a joining replica needs a proof-bearing log entry at the
+  # requested CID. A checkpoint period of 1 checkpoints the reconfiguration
+  # no-op itself (CID 3), leaving Last CID=-1 and no CertifiedDecision to
+  # send. Period 2 leaves the warm snapshot at CID 2 and the reconfiguration
+  # no-op as a log entry at CID 3, so the state reply carries both snapshot
+  # and a verifiable proof for CID 3.
+  sed -i -E 's|^[[:space:]]*system\.totalordermulticast\.checkpoint_period[[:space:]]*=.*$|system.totalordermulticast.checkpoint_period = 2|' \
     "$RUNTIME/$role/config/system.config"
-  grep -Eq '^system\.totalordermulticast\.checkpoint_period[[:space:]]*=[[:space:]]*1$' \
-    "$RUNTIME/$role/config/system.config" || fail "could not set checkpoint period for $role"
+  grep -Eq '^system\.totalordermulticast\.checkpoint_period[[:space:]]*=[[:space:]]*2$' \
+    "$RUNTIME/$role/config/system.config" || fail "could not set checkpoint period=2 for $role"
   chmod +x "$RUNTIME/$role/smartrun.sh"
 done
 
@@ -281,6 +288,17 @@ add_view_ready="$(now_ms)"
 printf 'view1_installed\t%s\tall_initial_replicas\n' "$add_view_ready" >> "$METRICS"
 
 wait_views 'post-add joining replica' 1 '0,1,2,3,4' replica4 || fail 'replica 4 did not install view 1'
+# The following invariant is the protocol-level regression check for the A2
+# failure reproduced in run #1: sources must expose checkpoint CID 2 plus a
+# proof-bearing log entry at CID 3, not checkpoint CID 3 with Last CID=-1.
+for id in 0 1 2 3; do
+  wait_marker "source replica $id state proof" 'Constructing ApplicationState up until CID 3' \
+    "$LOGS/replica${id}.log" "${replica_pid[$id]}" "$PHASE_TIMEOUT_SECONDS" || \
+    fail "source replica $id did not construct proof-bearing state for CID 3"
+  grep -Fq 'CID requested: 3. Last checkpoint: 2. Last CID: 3' "$LOGS/replica${id}.log" || \
+    fail "source replica $id has invalid checkpoint/log geometry for CID 3"
+done
+printf 'state_transfer_sources_ready\t%s\tcheckpoint=2;cid=3\n' "$(now_ms)" >> "$METRICS"
 wait_marker 'replica 4 state transfer' 'STATE_TRANSFER_INSTALLED id=4 counter=3 operations=3' \
   "$LOGS/replica4.log" "${replica_pid[4]}" "$PHASE_TIMEOUT_SECONDS" || \
   fail 'replica 4 did not install the transferred non-empty state'
