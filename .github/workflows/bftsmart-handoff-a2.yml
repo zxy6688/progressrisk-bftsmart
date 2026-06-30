@@ -1,0 +1,43 @@
+name: bftsmart-handoff-a2
+
+on:
+  workflow_dispatch:
+
+jobs:
+  single_handoff_gate:
+    name: stateful-4-to-5-to-4-handoff
+    runs-on: ubuntu-latest
+    timeout-minutes: 22
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '8'
+
+      - name: Checkout BFT-SMaRt v2.0
+        run: git clone --depth 1 --branch v2.0 https://github.com/bft-smart/library.git third_party/bftsmart
+
+      - name: Run one real stateful 4-to-5-to-4 handoff
+        env:
+          BFTSMART_HOME: ${{ github.workspace }}/third_party/bftsmart
+          RESULTS_DIR: ${{ github.workspace }}/bftsmart_handoff_a2
+          SNAPSHOT_BYTES: '1048576'
+          READY_TIMEOUT_SECONDS: '150'
+          PHASE_TIMEOUT_SECONDS: '180'
+          COMMAND_TIMEOUT_SECONDS: '75'
+        run: |
+          set +e
+          bash production/run_bftsmart_handoff_a2.sh
+          rc=$?
+          echo '===== A2 HANDOFF LOGS ====='
+          find bftsmart_handoff_a2 -type f \( -name '*.log' -o -name 'verdict.txt' -o -name 'metrics.tsv' -o -name 'metadata.txt' \) -print -exec tail -n 260 {} \; || true
+          exit "$rc"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: bftsmart-handoff-a2-results
+          path: bftsmart_handoff_a2
+          if-no-files-found: warn
