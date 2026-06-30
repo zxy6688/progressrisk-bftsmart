@@ -1,0 +1,121 @@
+name: bftsmart-final-cost
+
+on:
+  workflow_dispatch:
+
+jobs:
+  a2_preflight:
+    name: A2 real 4-to-5-to-4 handoff gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '8'
+      - name: Checkout BFT-SMaRt v2.0
+        run: git clone --depth 1 --branch v2.0 https://github.com/bft-smart/library.git third_party/bftsmart
+      - name: Run verified A2 once at 1 MiB (checkpoint 2 + proof-bearing CID 3)
+        env:
+          BFTSMART_HOME: ${{ github.workspace }}/third_party/bftsmart
+          RESULTS_DIR: ${{ github.workspace }}/a2_preflight
+          SNAPSHOT_BYTES: '1048576'
+          READY_TIMEOUT_SECONDS: '150'
+          PHASE_TIMEOUT_SECONDS: '180'
+          COMMAND_TIMEOUT_SECONDS: '75'
+          PORT_BASE: '22000'
+        run: |
+          set +e
+          bash production/run_bftsmart_handoff_a2.sh
+          rc=$?
+          echo '===== A2 PREFLIGHT LOGS ====='
+          find a2_preflight -type f \( -name '*.log' -o -name 'verdict.txt' -o -name 'summary_metrics.tsv' -o -name 'metadata.txt' \) -print -exec tail -n 220 {} \; || true
+          exit "$rc"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: a2-preflight-results
+          path: a2_preflight
+          if-no-files-found: warn
+
+  cost_matrix:
+    name: A3 ${{ matrix.label }} — 20 matched pairs
+    needs: a2_preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 210
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        include:
+          - label: 0B
+            bytes: '0'
+          - label: 1MiB
+            bytes: '1048576'
+          - label: 16MiB
+            bytes: '16777216'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '8'
+      - name: Checkout BFT-SMaRt v2.0
+        run: git clone --depth 1 --branch v2.0 https://github.com/bft-smart/library.git third_party/bftsmart
+      - name: Run adjacent control and handoff pairs
+        env:
+          BFTSMART_HOME: ${{ github.workspace }}/third_party/bftsmart
+          RESULTS_DIR: ${{ github.workspace }}/a3_${{ matrix.label }}
+          STATE_LABEL: ${{ matrix.label }}
+          SNAPSHOT_BYTES: ${{ matrix.bytes }}
+          PAIRS: '20'
+          READY_TIMEOUT_SECONDS: '150'
+          PHASE_TIMEOUT_SECONDS: '180'
+          COMMAND_TIMEOUT_SECONDS: '75'
+        run: |
+          set +e
+          bash production/run_bftsmart_cost_a3.sh
+          rc=$?
+          echo '===== A3 ${{ matrix.label }} VERDICT ====='
+          cat a3_${{ matrix.label }}/verdict.txt || true
+          echo '===== A3 ${{ matrix.label }} RAW ROWS ====='
+          cat a3_${{ matrix.label }}/a3_raw_trials.tsv || true
+          echo '===== A3 ${{ matrix.label }} COMPACT EVIDENCE ====='
+          find a3_${{ matrix.label }} -name compact_evidence.txt -maxdepth 4 -print -exec sed -n '1,100p' {} \; || true
+          exit "$rc"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: a3-raw-${{ matrix.label }}
+          path: a3_${{ matrix.label }}
+          if-no-files-found: warn
+
+  summarize:
+    name: aggregate A3 report
+    needs: cost_matrix
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: a3-raw-*
+          path: collected_a3
+          merge-multiple: false
+      - name: Aggregate raw trials and enforce completeness
+        env:
+          EXPECTED_PAIRS: '20'
+        run: |
+          set +e
+          python3 production/summarize_bftsmart_cost_a3.py collected_a3 bftsmart_final_report
+          rc=$?
+          cat bftsmart_final_report/a3_summary.md || true
+          exit "$rc"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: bftsmart-final-cost-report
+          path: bftsmart_final_report
+          if-no-files-found: warn

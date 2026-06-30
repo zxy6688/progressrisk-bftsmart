@@ -17,8 +17,10 @@ set -Eeuo pipefail
 : "${READY_TIMEOUT_SECONDS:=150}"
 : "${PHASE_TIMEOUT_SECONDS:=180}"
 : "${COMMAND_TIMEOUT_SECONDS:=75}"
+: "${PORT_BASE:=22000}"
+: "${SKIP_BUILD:=0}"
 
-for integer_name in SNAPSHOT_BYTES READY_TIMEOUT_SECONDS PHASE_TIMEOUT_SECONDS COMMAND_TIMEOUT_SECONDS; do
+for integer_name in SNAPSHOT_BYTES READY_TIMEOUT_SECONDS PHASE_TIMEOUT_SECONDS COMMAND_TIMEOUT_SECONDS PORT_BASE SKIP_BUILD; do
   value="${!integer_name}"
   case "$value" in
     ''|*[!0-9]*) echo "$integer_name must be a nonnegative integer" >&2; exit 2 ;;
@@ -28,6 +30,8 @@ done
 (( READY_TIMEOUT_SECONDS >= 1 && PHASE_TIMEOUT_SECONDS >= 1 && COMMAND_TIMEOUT_SECONDS >= 1 )) || {
   echo 'timeouts must be >= 1' >&2; exit 2;
 }
+(( PORT_BASE >= 1024 && PORT_BASE + 41 <= 65535 )) || { echo 'PORT_BASE must leave room for five replica port pairs' >&2; exit 2; }
+(( SKIP_BUILD == 0 || SKIP_BUILD == 1 )) || { echo 'SKIP_BUILD must be 0 or 1' >&2; exit 2; }
 [[ -x "$BFTSMART_HOME/gradlew" ]] || { echo "BFTSMART_HOME is not a BFT-SMaRt checkout: $BFTSMART_HOME" >&2; exit 2; }
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -164,11 +168,13 @@ run_fresh_client() {
 }
 
 # Build exactly the BFT-SMaRt v2.0 distribution that A0/A1 use.
-(
-  cd "$BFTSMART_HOME"
-  ./gradlew --no-daemon installDist
-)
 DIST="$BFTSMART_HOME/build/install/library"
+if (( SKIP_BUILD == 0 )); then
+  (
+    cd "$BFTSMART_HOME"
+    ./gradlew --no-daemon installDist
+  )
+fi
 [[ -x "$DIST/smartrun.sh" ]] || fail 'BFT-SMaRt installDist did not create smartrun.sh'
 
 rm -rf "$LOGS" "$RUNTIME" "$APP_BUILD"
@@ -186,8 +192,8 @@ mode=single_real_stateful_4_to_5_to_4_handoff
 bftsmart_ref=$(git -C "$BFTSMART_HOME" rev-parse HEAD 2>/dev/null || true)
 java=$(java -version 2>&1 | tr '\n' ';')
 snapshot_bytes=$SNAPSHOT_BYTES
+port_base=$PORT_BASE
 checkpoint_period=2
-port_base=22000
 initial_members=0,1,2,3
 post_add_members=0,1,2,3,4
 final_members=1,2,3,4
@@ -202,11 +208,11 @@ printf 'A2_HANDOFF_STARTED\n' > "$VERDICT"
 write_hosts() {
   local hosts="$1"
   cat > "$hosts" <<HOSTS
-0 127.0.0.1 22000 22001
-1 127.0.0.1 22010 22011
-2 127.0.0.1 22020 22021
-3 127.0.0.1 22030 22031
-4 127.0.0.1 22040 22041
+0 127.0.0.1 $PORT_BASE $((PORT_BASE + 1))
+1 127.0.0.1 $((PORT_BASE + 10)) $((PORT_BASE + 11))
+2 127.0.0.1 $((PORT_BASE + 20)) $((PORT_BASE + 21))
+3 127.0.0.1 $((PORT_BASE + 30)) $((PORT_BASE + 31))
+4 127.0.0.1 $((PORT_BASE + 40)) $((PORT_BASE + 41))
 HOSTS
 }
 
@@ -216,16 +222,10 @@ for role in replica0 replica1 replica2 replica3 replica4 ttp client_add client_r
   cp "$APP_JAR" "$RUNTIME/$role/lib/"
   rm -f "$RUNTIME/$role/config/currentView"
   write_hosts "$RUNTIME/$role/config/hosts.config"
-  # In BFT mode, a joining replica needs a proof-bearing log entry at the
-  # requested CID. A checkpoint period of 1 checkpoints the reconfiguration
-  # no-op itself (CID 3), leaving Last CID=-1 and no CertifiedDecision to
-  # send. Period 2 leaves the warm snapshot at CID 2 and the reconfiguration
-  # no-op as a log entry at CID 3, so the state reply carries both snapshot
-  # and a verifiable proof for CID 3.
   sed -i -E 's|^[[:space:]]*system\.totalordermulticast\.checkpoint_period[[:space:]]*=.*$|system.totalordermulticast.checkpoint_period = 2|' \
     "$RUNTIME/$role/config/system.config"
   grep -Eq '^system\.totalordermulticast\.checkpoint_period[[:space:]]*=[[:space:]]*2$' \
-    "$RUNTIME/$role/config/system.config" || fail "could not set checkpoint period=2 for $role"
+    "$RUNTIME/$role/config/system.config" || fail "could not set checkpoint period for $role"
   chmod +x "$RUNTIME/$role/smartrun.sh"
 done
 
@@ -275,11 +275,11 @@ replica_pid[4]="$!"
 all_pids+=("${replica_pid[4]}")
 wait_marker 'joining replica 4' 'Waiting for the TTP' "$LOGS/replica4.log" "${replica_pid[4]}" "$READY_TIMEOUT_SECONDS" || \
   fail 'replica 4 did not bind and wait for the TTP join message'
-printf 'replica4_waiting_for_ttp\t%s\tport=22040\n' "$(now_ms)" >> "$METRICS"
+printf 'replica4_waiting_for_ttp\t%s\tport=%s\n' "$(now_ms)" "$((PORT_BASE + 40))" >> "$METRICS"
 
 add_start="$(now_ms)"
 printf 'add_command_start\t%s\tadd replica=4\n' "$add_start" >> "$METRICS"
-run_reconfiguration add "$LOGS/ttp_add.log" 4 127.0.0.1 22040 22041
+run_reconfiguration add "$LOGS/ttp_add.log" 4 127.0.0.1 "$((PORT_BASE + 40))" "$((PORT_BASE + 41))"
 printf 'add_command_returned\t%s\tadd replica=4\n' "$(now_ms)" >> "$METRICS"
 
 wait_views 'post-add old replicas' 1 '0,1,2,3,4' replica0 replica1 replica2 replica3 || \
@@ -288,9 +288,9 @@ add_view_ready="$(now_ms)"
 printf 'view1_installed\t%s\tall_initial_replicas\n' "$add_view_ready" >> "$METRICS"
 
 wait_views 'post-add joining replica' 1 '0,1,2,3,4' replica4 || fail 'replica 4 did not install view 1'
-# The following invariant is the protocol-level regression check for the A2
-# failure reproduced in run #1: sources must expose checkpoint CID 2 plus a
-# proof-bearing log entry at CID 3, not checkpoint CID 3 with Last CID=-1.
+# Regression guard: sources must expose checkpoint CID 2 and a proof-bearing
+# log entry at CID 3. This is the exact state-transfer geometry required for
+# the joining replica to install the non-empty application snapshot.
 for id in 0 1 2 3; do
   wait_marker "source replica $id state proof" 'Constructing ApplicationState up until CID 3' \
     "$LOGS/replica${id}.log" "${replica_pid[$id]}" "$PHASE_TIMEOUT_SECONDS" || \

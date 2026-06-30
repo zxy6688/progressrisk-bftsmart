@@ -10,8 +10,10 @@ set -Eeuo pipefail
 : "${READY_TIMEOUT_SECONDS:=150}"
 : "${CLIENT_TIMEOUT_SECONDS:=75}"
 : "${STATEFUL_OPERATIONS:=3}"
+: "${PORT_BASE:=11000}"
+: "${SKIP_BUILD:=0}"
 
-for integer_name in SNAPSHOT_BYTES READY_TIMEOUT_SECONDS CLIENT_TIMEOUT_SECONDS STATEFUL_OPERATIONS; do
+for integer_name in SNAPSHOT_BYTES READY_TIMEOUT_SECONDS CLIENT_TIMEOUT_SECONDS STATEFUL_OPERATIONS PORT_BASE SKIP_BUILD; do
   value="${!integer_name}"
   case "$value" in
     ''|*[!0-9]*) echo "$integer_name must be a nonnegative integer" >&2; exit 2 ;;
@@ -21,6 +23,8 @@ done
 (( READY_TIMEOUT_SECONDS >= 1 && CLIENT_TIMEOUT_SECONDS >= 1 && STATEFUL_OPERATIONS >= 1 )) || {
   echo 'timeouts and STATEFUL_OPERATIONS must be >= 1' >&2; exit 2;
 }
+(( PORT_BASE >= 1024 && PORT_BASE + 41 <= 65535 )) || { echo 'PORT_BASE must leave room for five replica port pairs' >&2; exit 2; }
+(( SKIP_BUILD == 0 || SKIP_BUILD == 1 )) || { echo 'SKIP_BUILD must be 0 or 1' >&2; exit 2; }
 
 [[ -x "$BFTSMART_HOME/gradlew" ]] || {
   echo "BFTSMART_HOME is not a BFT-SMaRt source checkout: $BFTSMART_HOME" >&2
@@ -40,6 +44,9 @@ LOGS="$RESULTS_DIR/logs"
 RUNTIME="$RESULTS_DIR/runtime"
 APP_BUILD="$RESULTS_DIR/app_build"
 VERDICT="$RESULTS_DIR/verdict.txt"
+METRICS="$RESULTS_DIR/summary_metrics.tsv"
+
+now_ms() { date +%s%3N; }
 
 pids=()
 cleanup() {
@@ -75,11 +82,13 @@ wait_for_marker() {
 # Compile against the exact pinned BFT-SMaRt distribution using the same Java 8
 # runtime as the passing official A0 workflow. The app jar is added to lib/ so
 # official smartrun.sh retains control of JVM security/logging/classpath flags.
-(
-  cd "$BFTSMART_HOME"
-  ./gradlew --no-daemon installDist
-)
 DIST="$BFTSMART_HOME/build/install/library"
+if (( SKIP_BUILD == 0 )); then
+  (
+    cd "$BFTSMART_HOME"
+    ./gradlew --no-daemon installDist
+  )
+fi
 [[ -x "$DIST/smartrun.sh" ]] || fail "BFT-SMaRt installDist did not create smartrun.sh"
 
 rm -rf "$LOGS" "$RUNTIME" "$APP_BUILD"
@@ -97,19 +106,32 @@ snapshot_bytes=$SNAPSHOT_BYTES
 stateful_operations=$STATEFUL_OPERATIONS
 ready_timeout_seconds=$READY_TIMEOUT_SECONDS
 client_timeout_seconds=$CLIENT_TIMEOUT_SECONDS
+port_base=$PORT_BASE
 META
+printf 'metric\tvalue_ms\n' > "$METRICS"
 
-# Same independent local-directory layout that passed A0. We change exactly one
-# state-transfer-relevant parameter: checkpoint period 1 forces a snapshot after
-# live ordered operations so A1 validates mutated-state serialization.
+# Same independent local-directory layout that passed A0. A3 uses checkpoint
+# period 2 in both control and handoff arms so the background checkpoint policy
+# is matched; the warm-up still creates a non-empty snapshot at CID 2.
+write_hosts() {
+  local hosts="$1"
+  cat > "$hosts" <<HOSTS
+0 127.0.0.1 $PORT_BASE $((PORT_BASE + 1))
+1 127.0.0.1 $((PORT_BASE + 10)) $((PORT_BASE + 11))
+2 127.0.0.1 $((PORT_BASE + 20)) $((PORT_BASE + 21))
+3 127.0.0.1 $((PORT_BASE + 30)) $((PORT_BASE + 31))
+4 127.0.0.1 $((PORT_BASE + 40)) $((PORT_BASE + 41))
+HOSTS
+}
 for role in replica0 replica1 replica2 replica3 client; do
   mkdir -p "$RUNTIME/$role"
   cp -a "$DIST/." "$RUNTIME/$role/"
   cp "$APP_BUILD/progressrisk-stateful-a1.jar" "$RUNTIME/$role/lib/"
   rm -f "$RUNTIME/$role/config/currentView"
-  sed -i -E 's|^[[:space:]]*system\.totalordermulticast\.checkpoint_period[[:space:]]*=.*$|system.totalordermulticast.checkpoint_period = 1|' \
+  write_hosts "$RUNTIME/$role/config/hosts.config"
+  sed -i -E 's|^[[:space:]]*system\.totalordermulticast\.checkpoint_period[[:space:]]*=.*$|system.totalordermulticast.checkpoint_period = 2|' \
     "$RUNTIME/$role/config/system.config"
-  grep -Eq '^system\.totalordermulticast\.checkpoint_period[[:space:]]*=[[:space:]]*1$' \
+  grep -Eq '^system\.totalordermulticast\.checkpoint_period[[:space:]]*=[[:space:]]*2$' \
     "$RUNTIME/$role/config/system.config" || fail "could not set checkpoint period for $role"
   chmod +x "$RUNTIME/$role/smartrun.sh"
 done
@@ -127,6 +149,8 @@ for id in 0 1 2 3; do
     fail "replica $id did not become ready"
 done
 printf 'ALL_FOUR_STATEFUL_REPLICAS_READY\n' > "$VERDICT"
+baseline_start="$(now_ms)"
+printf 'baseline_start\t%s\n' "$baseline_start" >> "$METRICS"
 
 set +e
 (
@@ -149,6 +173,8 @@ for id in 0 1 2 3; do
     fail "replica $id did not serialize a snapshot after state mutation"
 done
 
-printf 'STATEFUL_BASELINE_PASS\nvalidated_stateful_replies=%s\nsnapshot_bytes=%s\n' \
-  "$reply_count" "$SNAPSHOT_BYTES" >> "$VERDICT"
+baseline_complete="$(now_ms)"
+printf 'T_control_3ops_ms\t%s\n' "$(( baseline_complete - baseline_start ))" >> "$METRICS"
+printf 'STATEFUL_BASELINE_PASS\nvalidated_stateful_replies=%s\nsnapshot_bytes=%s\nport_base=%s\n' \
+  "$reply_count" "$SNAPSHOT_BYTES" "$PORT_BASE" >> "$VERDICT"
 echo "A1 stateful baseline passed with $reply_count validated replies and $SNAPSHOT_BYTES-byte snapshots."
