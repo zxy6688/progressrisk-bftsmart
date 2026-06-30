@@ -1,0 +1,55 @@
+name: bftsmart-handoff
+
+on:
+  workflow_dispatch:
+    inputs:
+      trials:
+        description: "Independent matched no-op/reconfiguration pairs per state size"
+        required: true
+        default: "20"
+      state_sizes:
+        description: "Comma-separated snapshot sizes in bytes"
+        required: true
+        default: "0,1048576,16777216"
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Checkout official BFT-SMaRt v2.0
+        run: git clone --depth 1 --branch v2.0 https://github.com/bft-smart/library.git third_party/bftsmart
+      - name: Preflight — one stateful handoff pair
+        env:
+          BFTSMART_HOME: ${{ github.workspace }}/third_party/bftsmart
+          RESULTS_DIR: ${{ github.workspace }}/bftsmart_handoff_preflight
+          TRIALS: "1"
+          STATE_SIZES: "1048576"
+          PROBE_SECONDS: "45"
+          WARMUP_SECONDS: "5"
+          VIEW_TIMEOUT_SECONDS: "15"
+        run: ./production/run_bftsmart_handoff_benchmark.sh
+      - name: Formal state-size sweep
+        env:
+          BFTSMART_HOME: ${{ github.workspace }}/third_party/bftsmart
+          RESULTS_DIR: ${{ github.workspace }}/bftsmart_handoff_results
+          TRIALS: ${{ inputs.trials }}
+          STATE_SIZES: ${{ inputs.state_sizes }}
+          PROBE_SECONDS: "45"
+          WARMUP_SECONDS: "5"
+          VIEW_TIMEOUT_SECONDS: "15"
+          SKIP_BUILD: "1"
+        run: ./production/run_bftsmart_handoff_benchmark.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: bftsmart-handoff-results
+          path: |
+            bftsmart_handoff_preflight
+            bftsmart_handoff_results
+          if-no-files-found: warn

@@ -1,0 +1,78 @@
+\relax 
+\citation{omniledger,rapidchain}
+\citation{han2022allocation}
+\citation{cochain,spiralshard,levee}
+\citation{castro1999pbft}
+\citation{aublin2013rbft}
+\@writefile{toc}{\contentsline {section}{\numberline {I}Introduction}{1}{}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{\numberline {\mbox  {I-}0a}Contributions.}{1}{}\protected@file@percent }
+\citation{castro1999pbft}
+\citation{omniledger,rapidchain}
+\citation{han2022allocation}
+\citation{cochain}
+\citation{spiralshard}
+\@writefile{toc}{\contentsline {section}{\numberline {II}Background and Motivation}{2}{}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {II-A}}PBFT progress and view recovery}{2}{}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {II-B}}Why local risk matters in sharding}{2}{}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {III}Problem and Threat Model}{2}{}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {III-A}}System model}{2}{}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {III-B}}Persistent active-withholding adversary}{2}{}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {III-C}}Objective}{2}{}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {IV}PBFT Progress Observation Model}{2}{}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {IV-A}}Batch-level observation}{2}{}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {1}{\ignorespaces \textsc  {ProgressRisk}observes each logical batch once, at its final progress outcome. Internal timeout and view-recovery messages are diagnostic traces rather than independent Bayesian evidence.}}{3}{}\protected@file@percent }
+\newlabel{fig:observation}{{1}{3}{}{figure.1}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {IV-B}}Context-calibrated likelihood}{3}{}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {IV-C}}Exact constrained posterior}{3}{}\protected@file@percent }
+\newlabel{eq:posterior}{{10}{3}{}{equation.10}{}}
+\newlabel{eq:risk}{{11}{3}{}{equation.11}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {V}Budgeted Risk-Aware Random Exchange}{3}{}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {V-A}}Action space}{3}{}\protected@file@percent }
+\newlabel{eq:utility}{{13}{3}{}{equation.13}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {V-B}}Complexity}{3}{}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {VI}Evaluation}{3}{}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {VI-A}}Questions and setup}{3}{}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {I}{\ignorespaces Held-out controlled-simulation policy comparison (24 unseen seeds, locked $k_{\max }=3$). ``Failure epochs'' is the fraction of epochs containing at least one true $A_s>f$ shard.}}{4}{}\protected@file@percent }
+\newlabel{tab:policy}{{I}{4}{}{table.1}{}}
+\@writefile{lof}{\contentsline {figure}{\numberline {2}{\ignorespaces Held-out policy validation. Error bars show standard deviation across 24 unseen seeds.}}{4}{}\protected@file@percent }
+\newlabel{fig:policy}{{2}{4}{}{figure.2}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {VI-B}}Held-out policy comparison}{4}{}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {VI-C}}Observation controls and calibration}{4}{}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {3}{\ignorespaces Context negative control. The same benign degradation trace is not attributed to active blocking when visible context is provided; omitting context causes systematic false alarms.}}{4}{}\protected@file@percent }
+\newlabel{fig:context}{{3}{4}{}{figure.3}{}}
+\@writefile{lof}{\contentsline {figure}{\numberline {4}{\ignorespaces Posterior calibration under the matched controlled simulator (12 seeds).}}{4}{}\protected@file@percent }
+\newlabel{fig:calibration}{{4}{4}{}{figure.4}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {VI-D}}Robustness, scale, and action capacity}{4}{}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{\numberline {\mbox  {VI-D}0a}Held-out attack-intensity mismatch.}{4}{}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {II}{\ignorespaces Held-out attack-intensity mismatch (12 paired seeds).}}{5}{}\protected@file@percent }
+\newlabel{tab:mismatch}{{II}{5}{}{table.2}{}}
+\@writefile{lof}{\contentsline {figure}{\numberline {5}{\ignorespaces Scale validation with constant 22-validator PBFT committees (12 seeds per scale).}}{5}{}\protected@file@percent }
+\newlabel{fig:scale}{{5}{5}{}{figure.5}{}}
+\@writefile{toc}{\contentsline {paragraph}{\numberline {\mbox  {VI-D}0b}Scale validation.}{5}{}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{\numberline {\mbox  {VI-D}0c}Observation exposure.}{5}{}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{\numberline {\mbox  {VI-D}0d}Action capacity.}{5}{}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {6}{\ignorespaces Observation-exposure robustness under a held-out attack intensity (12 paired seeds). The controller is unchanged; only the number of logical batches observed per epoch varies.}}{5}{}\protected@file@percent }
+\newlabel{fig:exposure}{{6}{5}{}{figure.6}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {III}{\ignorespaces Persistent-active-fraction sensitivity (12 paired seeds, $k\leq 6$).}}{5}{}\protected@file@percent }
+\newlabel{tab:sensitivity}{{III}{5}{}{table.3}{}}
+\@writefile{toc}{\contentsline {paragraph}{\numberline {\mbox  {VI-D}0e}Threat-budget sensitivity.}{5}{}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {VII}Discussion and Limitations}{5}{}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{\numberline {\mbox  {VII-}0a}What the posterior means.}{5}{}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{\numberline {\mbox  {VII-}0b}Threat-budget assumption.}{5}{}\protected@file@percent }
+\citation{bftsmart}
+\bibcite{castro1999pbft}{1}
+\bibcite{aublin2013rbft}{2}
+\bibcite{omniledger}{3}
+\bibcite{rapidchain}{4}
+\bibcite{han2022allocation}{5}
+\bibcite{cochain}{6}
+\bibcite{spiralshard}{7}
+\bibcite{levee}{8}
+\bibcite{bftsmart}{9}
+\@writefile{lof}{\contentsline {figure}{\numberline {7}{\ignorespaces Sensitivity to true persistent active fraction. The failure of the $k\leq 6$ controller at 0.32 is an explicit action-capacity boundary.}}{6}{}\protected@file@percent }
+\newlabel{fig:sensitivity}{{7}{6}{}{figure.7}{}}
+\@writefile{toc}{\contentsline {paragraph}{\numberline {\mbox  {VII-}0c}Reconfiguration cost.}{6}{}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{\numberline {\mbox  {VII-}0d}Relationship to corrupted-shard tolerance.}{6}{}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {VIII}Conclusion}{6}{}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{References}{6}{}\protected@file@percent }
+\gdef \@abspage@last{6}

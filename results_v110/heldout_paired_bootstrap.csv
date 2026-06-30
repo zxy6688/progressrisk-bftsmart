@@ -1,0 +1,5 @@
+focal,baseline,n,absolute_reduction,ci_low,ci_high,bootstrap_draws,bootstrap_seed
+risk_aware_exchange,no_reconfig,24,0.5885416666666667,0.43229166666666674,0.7309027777777777,10000,20260630
+risk_aware_exchange,risk_triggered_random_partner,24,0.203125,0.1232638888888889,0.28472222222222227,10000,20260630
+risk_aware_exchange,random_local_exchange,24,0.5659722222222222,0.46875,0.657986111111111,10000,20260630
+risk_aware_exchange,periodic_global_reshuffle,24,0.6024305555555556,0.47048611111111116,0.7118055555555557,10000,20260630
