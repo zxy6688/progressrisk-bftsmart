@@ -33,7 +33,7 @@ jobs:
           PROBE_SECONDS: "45"
           WARMUP_SECONDS: "5"
           VIEW_TIMEOUT_SECONDS: "15"
-        run: ./production/run_bftsmart_handoff_benchmark.sh
+        run: bash production/run_bftsmart_handoff_benchmark.sh
       - name: Formal state-size sweep
         env:
           BFTSMART_HOME: ${{ github.workspace }}/third_party/bftsmart
@@ -44,7 +44,7 @@ jobs:
           WARMUP_SECONDS: "5"
           VIEW_TIMEOUT_SECONDS: "15"
           SKIP_BUILD: "1"
-        run: ./production/run_bftsmart_handoff_benchmark.sh
+        run: bash production/run_bftsmart_handoff_benchmark.sh
       - uses: actions/upload-artifact@v4
         if: always()
         with:
