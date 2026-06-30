@@ -1,30 +1,14 @@
-# ProgressRisk v1.13 runner audit repair
+# ProgressRisk v1.14 — withdrawn v1.13 repair
 
-## Do not apply v1.12
+Do not run v1.13. A source-level audit of the pushed v1.13 script found that it still appended to the stock `hosts.config`, leaving replicas 0–3 on the stock ports across the no-op and reconfiguration subtrials. It also started replica 4 in the no-op control and did not use an `exec` launch wrapper that guarantees the recorded PID is the JVM process.
 
-A post-release audit found one remaining fatal control-flow defect in v1.12:
-replica 4 is intentionally outside the initial `0,1,2,3` view. In BFT-SMaRt
-v2.0, `ServiceReplica` blocks in its constructor while such a replica waits for
-the TTP join reply. Therefore its post-constructor `STATEFUL_COUNTER_READY`
-marker cannot appear before `DefaultVMServices addServer` is issued.
+## v1.14 changes
 
-## v1.13 fixes
+1. Replaces—not appends—the full `hosts.config` on every isolated local runtime, assigning all five replicas unique per-trial ports.
+2. Uses `exec java` in the launched subshell so cleanup kills the actual JVM.
+3. Starts only replicas 0–3 for the no-op control.
+4. In the reconfiguration arm, waits for the official BFT-SMaRt `Waiting for the TTP` message from replica 4 before calling `DefaultVMServices addServer`.
+5. Emits and waits for the first successfully ordered application request before joining replica 4, so a zero-operation state transfer cannot be accepted.
+6. Streams probe outcomes to CSV and keeps the workflow smoke-only (`trials=1`, `state_sizes=1048576`) by default.
 
-1. Retains v1.12's full per-runtime `hosts.config` rewrite, unique ports, and
-   direct-JVM cleanup.
-2. Waits for BFT-SMaRt's own `Waiting for the TTP` log before issuing the add
-   command. This log is emitted only after the joining replica has built and
-   bound its replica-to-replica communication listener.
-3. Waits for `STATEFUL_COUNTER_READY` only after the add command and view
-   installation, then verifies `STATE_TRANSFER_INSTALLED` with a nonzero
-   operation count and exact configured payload size.
-4. Adds `STATEFUL_COUNTER_FIRST_ORDERED` and waits for it before reconfiguration,
-   so state transfer cannot be falsely counted before the initial committee has
-   actually executed a request.
-5. Streams probe CSV rows to disk, so a failed trial retains partial probe
-   evidence in the uploaded artifact.
-6. Makes the workflow smoke-only by default. The formal 20×3 sweep requires an
-   explicit `run_formal_sweep=true` selection after a successful preflight.
-
-This patch is a runner correction only. It changes no scientific result and no
-paper claim.
+This patch changes only the measurement harness. It changes no simulator result and no paper claim.
