@@ -1,0 +1,44 @@
+name: bftsmart-stateful-baseline
+
+on:
+  workflow_dispatch:
+
+jobs:
+  stateful_baseline_gate:
+    name: stateful-counter-gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 18
+    steps:
+      - uses: actions/checkout@v4
+
+      # BFT-SMaRt v2.0 declares Java 8 source/target compatibility.
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '8'
+
+      - name: Checkout BFT-SMaRt v2.0
+        run: git clone --depth 1 --branch v2.0 https://github.com/bft-smart/library.git third_party/bftsmart
+
+      - name: Run stateful four-replica baseline gate
+        env:
+          BFTSMART_HOME: ${{ github.workspace }}/third_party/bftsmart
+          RESULTS_DIR: ${{ github.workspace }}/bftsmart_stateful_baseline
+          SNAPSHOT_BYTES: '1048576'
+          READY_TIMEOUT_SECONDS: '150'
+          CLIENT_TIMEOUT_SECONDS: '75'
+          STATEFUL_OPERATIONS: '3'
+        run: |
+          set +e
+          bash production/run_bftsmart_stateful_baseline.sh
+          rc=$?
+          echo '===== STATEFUL BASELINE LOGS ====='
+          find bftsmart_stateful_baseline -type f \( -name '*.log' -o -name 'verdict.txt' -o -name 'metadata.txt' \) -print -exec tail -n 220 {} \; || true
+          exit "$rc"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: bftsmart-stateful-baseline-results
+          path: bftsmart_stateful_baseline
+          if-no-files-found: warn
