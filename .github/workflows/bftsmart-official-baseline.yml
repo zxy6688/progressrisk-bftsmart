@@ -1,0 +1,44 @@
+name: bftsmart-official-baseline
+
+on:
+  workflow_dispatch:
+
+jobs:
+  official_counter_gate:
+    name: official-counter-gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      # BFT-SMaRt v2.0 targets Java 8. Keep the runtime aligned with the
+      # upstream release for this baseline gate.
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '8'
+
+      - name: Checkout BFT-SMaRt v2.0
+        run: git clone --depth 1 --branch v2.0 https://github.com/bft-smart/library.git third_party/bftsmart
+
+      - name: Run untouched official Counter baseline
+        env:
+          BFTSMART_HOME: ${{ github.workspace }}/third_party/bftsmart
+          RESULTS_DIR: ${{ github.workspace }}/bftsmart_official_baseline
+          READY_TIMEOUT_SECONDS: '120'
+          CLIENT_TIMEOUT_SECONDS: '60'
+          COUNTER_OPERATIONS: '3'
+        run: |
+          set +e
+          bash production/run_bftsmart_official_baseline.sh
+          rc=$?
+          echo '===== OFFICIAL BASELINE LOGS ====='
+          find bftsmart_official_baseline -type f \( -name '*.log' -o -name 'verdict.txt' -o -name 'metadata.txt' \) -print -exec tail -n 180 {} \; || true
+          exit "$rc"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: bftsmart-official-baseline-results
+          path: bftsmart_official_baseline
+          if-no-files-found: warn
